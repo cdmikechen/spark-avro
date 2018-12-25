@@ -17,25 +17,30 @@
 package com.databricks.spark.avro
 
 import java.io._
-import java.nio.file.Files
+import java.net.URL
+import java.nio.file.{Files, Path, Paths}
 import java.sql.{Date, Timestamp}
+import java.time.LocalDate
 import java.util.{TimeZone, UUID}
 
-import scala.collection.JavaConversions._
+import scala.collection.JavaConverters._
+
+import com.databricks.spark.avro.SchemaConverters.IncompatibleSchemaException
 import org.apache.avro.Schema
 import org.apache.avro.Schema.{Field, Type}
 import org.apache.avro.file.DataFileWriter
 import org.apache.avro.generic.{GenericData, GenericDatumWriter, GenericRecord}
 import org.apache.avro.generic.GenericData.{EnumSymbol, Fixed}
 import org.apache.commons.io.FileUtils
+import org.scalatest.{BeforeAndAfterAll, FunSuite}
+
 import org.apache.spark.sql._
 import org.apache.spark.sql.types._
-import org.scalatest.{BeforeAndAfterAll, FunSuite}
-import com.databricks.spark.avro.SchemaConverters.IncompatibleSchemaException
 
 class AvroSuite extends FunSuite with BeforeAndAfterAll {
   val episodesFile = "src/test/resources/episodes.avro"
   val testFile = "src/test/resources/test.avro"
+  val episodesWithoutExtension = "src/test/resources/episodesAvro"
 
   private var spark: SparkSession = _
 
@@ -54,6 +59,11 @@ class AvroSuite extends FunSuite with BeforeAndAfterAll {
     } finally {
       super.afterAll()
     }
+  }
+
+  test("reading from multiple paths") {
+    val df = spark.read.avro(episodesFile, episodesFile)
+    assert(df.count == 16)
   }
 
   test("reading and writing partitioned data") {
@@ -95,7 +105,7 @@ class AvroSuite extends FunSuite with BeforeAndAfterAll {
 
   test("test NULL avro type") {
     TestUtils.withTempDir { dir =>
-      val fields = Seq(new Field("null", Schema.create(Type.NULL), "doc", null))
+      val fields = Seq(new Field("null", Schema.create(Type.NULL), "doc", null)).asJava
       val schema = Schema.createRecord("name", "docs", "namespace", false)
       schema.setFields(fields)
       val datumWriter = new GenericDatumWriter[GenericRecord](schema)
@@ -116,8 +126,9 @@ class AvroSuite extends FunSuite with BeforeAndAfterAll {
   test("union(int, long) is read as long") {
     TestUtils.withTempDir { dir =>
       val avroSchema: Schema = {
-        val union = Schema.createUnion(List(Schema.create(Type.INT), Schema.create(Type.LONG)))
-        val fields = Seq(new Field("field1", union, "doc", null))
+        val union =
+          Schema.createUnion(List(Schema.create(Type.INT), Schema.create(Type.LONG)).asJava)
+        val fields = Seq(new Field("field1", union, "doc", null)).asJava
         val schema = Schema.createRecord("name", "docs", "namespace", false)
         schema.setFields(fields)
         schema
@@ -143,8 +154,9 @@ class AvroSuite extends FunSuite with BeforeAndAfterAll {
   test("union(float, double) is read as double") {
     TestUtils.withTempDir { dir =>
       val avroSchema: Schema = {
-        val union = Schema.createUnion(List(Schema.create(Type.FLOAT), Schema.create(Type.DOUBLE)))
-        val fields = Seq(new Field("field1", union, "doc", null))
+        val union =
+          Schema.createUnion(List(Schema.create(Type.FLOAT), Schema.create(Type.DOUBLE)).asJava)
+        val fields = Seq(new Field("field1", union, "doc", null)).asJava
         val schema = Schema.createRecord("name", "docs", "namespace", false)
         schema.setFields(fields)
         schema
@@ -171,8 +183,12 @@ class AvroSuite extends FunSuite with BeforeAndAfterAll {
     TestUtils.withTempDir { dir =>
       val avroSchema: Schema = {
         val union = Schema.createUnion(
-          List(Schema.create(Type.FLOAT), Schema.create(Type.DOUBLE), Schema.create(Type.NULL)))
-        val fields = Seq(new Field("field1", union, "doc", null))
+          List(Schema.create(Type.FLOAT),
+            Schema.create(Type.DOUBLE),
+            Schema.create(Type.NULL)
+          ).asJava
+        )
+        val fields = Seq(new Field("field1", union, "doc", null)).asJava
         val schema = Schema.createRecord("name", "docs", "namespace", false)
         schema.setFields(fields)
         schema
@@ -197,8 +213,8 @@ class AvroSuite extends FunSuite with BeforeAndAfterAll {
 
   test("Union of a single type") {
     TestUtils.withTempDir { dir =>
-      val UnionOfOne = Schema.createUnion(List(Schema.create(Type.INT)))
-      val fields = Seq(new Field("field1", UnionOfOne, "doc", null))
+      val UnionOfOne = Schema.createUnion(List(Schema.create(Type.INT)).asJava)
+      val fields = Seq(new Field("field1", UnionOfOne, "doc", null)).asJava
       val schema = Schema.createRecord("name", "docs", "namespace", false)
       schema.setFields(fields)
 
@@ -221,15 +237,15 @@ class AvroSuite extends FunSuite with BeforeAndAfterAll {
   test("Complex Union Type") {
     TestUtils.withTempDir { dir =>
       val fixedSchema = Schema.createFixed("fixed_name", "doc", "namespace", 4)
-      val enumSchema = Schema.createEnum("enum_name", "doc", "namespace", List("e1", "e2"))
+      val enumSchema = Schema.createEnum("enum_name", "doc", "namespace", List("e1", "e2").asJava)
       val complexUnionType = Schema.createUnion(
-        List(Schema.create(Type.INT), Schema.create(Type.STRING), fixedSchema, enumSchema))
+        List(Schema.create(Type.INT), Schema.create(Type.STRING), fixedSchema, enumSchema).asJava)
       val fields = Seq(
         new Field("field1", complexUnionType, "doc", null),
         new Field("field2", complexUnionType, "doc", null),
         new Field("field3", complexUnionType, "doc", null),
         new Field("field4", complexUnionType, "doc", null)
-      )
+      ).asJava
       val schema = Schema.createRecord("name", "docs", "namespace", false)
       schema.setFields(fields)
       val datumWriter = new GenericDatumWriter[GenericRecord](schema)
@@ -265,7 +281,7 @@ class AvroSuite extends FunSuite with BeforeAndAfterAll {
         StructField("map", MapType(StringType, StringType), true),
         StructField("struct", StructType(Seq(StructField("int", IntegerType, true))))))
       val rdd = spark.sparkContext.parallelize(Seq[Row](
-        Row(null, new Timestamp(1), Array[Short](1,2,3), null, null),
+        Row(null, new Timestamp(1), Array[Short](1, 2, 3), null, null),
         Row(null, null, null, null, null),
         Row(null, null, null, null, null),
         Row(null, null, null, null, null)))
@@ -295,22 +311,28 @@ class AvroSuite extends FunSuite with BeforeAndAfterAll {
   }
 
   test("Date field type") {
+    def toLocalDateSafe(d: Date) = Option(d).map(_.toLocalDate).orNull
+    val sparkFinal = spark
     TestUtils.withTempDir { dir =>
       val schema = StructType(Seq(
         StructField("float", FloatType, true),
         StructField("date", DateType, true)
       ))
       TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+      val ld1 = LocalDate.of(2016, 1, 4)
+      val ld2 = LocalDate.of(2016, 4, 7)
       val rdd = spark.sparkContext.parallelize(Seq(
         Row(1f, null),
-        Row(2f, new Date(1451948400000L)),
-        Row(3f, new Date(1460066400500L))
+        Row(2f, Date.valueOf(ld1)),
+        Row(3f, Date.valueOf(ld2))
       ))
       val df = spark.createDataFrame(rdd, schema)
       df.write.avro(dir.toString)
       assert(spark.read.avro(dir.toString).count == rdd.count)
-      assert(spark.read.avro(dir.toString).select("date").collect().map(_(0)).toSet ==
-        Array(null, 1451865600000L, 1459987200000L).toSet)
+
+      val actualResults = spark.read.avro(dir.toString).select("date").collect()
+        .map(_(0).asInstanceOf[Date]).map(toLocalDateSafe).toSet
+      assert(actualResults == Set(null, ld1, ld2))
     }
   }
 
@@ -336,7 +358,7 @@ class AvroSuite extends FunSuite with BeforeAndAfterAll {
       }
 
       val rdd = spark.sparkContext.parallelize(Seq(
-        Row(arrayOfByte, Array[Short](1,2,3,4), Array[Float](1f, 2f, 3f, 4f),
+        Row(arrayOfByte, Array[Short](1, 2, 3, 4), Array[Float](1f, 2f, 3f, 4f),
           Array[Boolean](true, false, true, false), Array[Long](1L, 2L), Array[Double](1.0, 2.0),
           Array[BigDecimal](BigDecimal.valueOf(3)), Array[Array[Byte]](arrayOfByte, arrayOfByte),
           Array[Timestamp](new Timestamp(0)),
@@ -476,10 +498,14 @@ class AvroSuite extends FunSuite with BeforeAndAfterAll {
       for (i <- arrayOfByte.indices) {
         arrayOfByte(i) = i.toByte
       }
+      val ts1 = new Timestamp(666)
+      val ts2 = new Timestamp(777)
+      val ts3 = new Timestamp(42)
+      val decimalPi = new java.math.BigDecimal("3.14")
       val cityRDD = spark.sparkContext.parallelize(Seq(
-        Row("San Francisco", 12, new Timestamp(666), null, arrayOfByte),
-        Row("Palo Alto", null, new Timestamp(777), null, arrayOfByte),
-        Row("Munich", 8, new Timestamp(42), Decimal(3.14), arrayOfByte)))
+        Row("San Francisco", 12, ts1, null, arrayOfByte),
+        Row("Palo Alto", null, ts2, null, arrayOfByte),
+        Row("Munich", 8, ts3, decimalPi, arrayOfByte)))
       val cityDataFrame = spark.createDataFrame(cityRDD, testSchema)
 
       val avroDir = tempDir + "/avro"
@@ -488,11 +514,11 @@ class AvroSuite extends FunSuite with BeforeAndAfterAll {
 
       // TimesStamps are converted to longs
       val times = spark.read.avro(avroDir).select("Time").collect()
-      assert(times.map(_(0)).toSet == Set(666, 777, 42))
+      assert(times.map(_(0)).toSet == Set(ts1, ts2, ts3))
 
       // DecimalType should be converted to string
       val decimals = spark.read.avro(avroDir).select("Decimal").collect()
-      assert(decimals.map(_(0)).contains("3.14"))
+      assert(decimals.map(_(0)).contains(decimalPi))
 
       // There should be a null entry
       val length = spark.read.avro(avroDir).select("Length").collect()
@@ -502,6 +528,49 @@ class AvroSuite extends FunSuite with BeforeAndAfterAll {
       for (i <- arrayOfByte.indices) {
         assert(binary(1)(0).asInstanceOf[Array[Byte]](i) == arrayOfByte(i))
       }
+    }
+  }
+
+  test("correctly read long as date/timestamp type") {
+    TestUtils.withTempDir { tempDir =>
+      val sparkSession = spark
+      import sparkSession.implicits._
+
+      val currentTime = new Timestamp(System.currentTimeMillis())
+      val currentDate = new Date(System.currentTimeMillis())
+      val schema = StructType(Seq(
+        StructField("_1", DateType, false), StructField("_2", TimestampType, false)))
+      val writeDs = Seq((currentDate, currentTime)).toDS
+
+      val avroDir = tempDir + "/avro"
+      writeDs.write.avro(avroDir)
+      assert(spark.read.avro(avroDir).collect().length == 1)
+
+      val readDs = spark.read.schema(schema).avro(avroDir).as[(Date, Timestamp)]
+
+      assert(readDs.collect().sameElements(writeDs.collect()))
+    }
+  }
+
+  test("does not coerce null date/timestamp value to 0 epoch.") {
+    TestUtils.withTempDir { tempDir =>
+      val sparkSession = spark
+      import sparkSession.implicits._
+
+      val nullTime: Timestamp = null
+      val nullDate: Date = null
+      val schema = StructType(Seq(
+        StructField("_1", DateType, nullable = true),
+        StructField("_2", TimestampType, nullable = true))
+      )
+      val writeDs = Seq((nullDate, nullTime)).toDS
+
+      val avroDir = tempDir + "/avro"
+      writeDs.write.avro(avroDir)
+      val readValues = spark.read.schema(schema).avro(avroDir).as[(Date, Timestamp)].collect
+
+      assert(readValues.size == 1)
+      assert(readValues.head == (nullDate, nullTime))
     }
   }
 
@@ -569,7 +638,12 @@ class AvroSuite extends FunSuite with BeforeAndAfterAll {
     intercept[FileNotFoundException] {
       TestUtils.withTempDir { dir =>
         FileUtils.touch(new File(dir, "test"))
-        spark.read.avro(dir.toString)
+        val hadoopConf = spark.sqlContext.sparkContext.hadoopConfiguration
+        try {
+          hadoopConf.set(DefaultSource.IgnoreFilesWithoutExtensionProperty, "true")
+          spark.read.avro(dir.toString)
+        } finally {
+          hadoopConf.unset(DefaultSource.IgnoreFilesWithoutExtensionProperty)        }
       }
     }
 
@@ -631,12 +705,18 @@ class AvroSuite extends FunSuite with BeforeAndAfterAll {
 
       Files.createFile(new File(tempSaveDir, "non-avro").toPath)
 
-      val newDf = spark
-        .read
-        .option(DefaultSource.IgnoreFilesWithoutExtensionProperty, "true")
-        .avro(tempSaveDir)
+      val hadoopConf = spark.sqlContext.sparkContext.hadoopConfiguration
+      val count = try {
+        hadoopConf.set(DefaultSource.IgnoreFilesWithoutExtensionProperty, "true")
+        val newDf = spark
+          .read
+          .avro(tempSaveDir)
+        newDf.count()
+      } finally {
+        hadoopConf.unset(DefaultSource.IgnoreFilesWithoutExtensionProperty)
+      }
 
-      assert(newDf.count == 8)
+      assert(count == 8)
     }
   }
 
@@ -750,6 +830,26 @@ class AvroSuite extends FunSuite with BeforeAndAfterAll {
       val readDf = spark.read.avro(outputFolder)
       // Check if the written DataFrame is equals than read DataFrame
       assert(readDf.collect().sameElements(writeDf.collect()))
+    }
+  }
+
+  test("do not ignore files without .avro extension by default") {
+    TestUtils.withTempDir { dir =>
+      dir.mkdirs()
+      Files.copy(
+        Paths.get(episodesWithoutExtension),
+        Paths.get(dir.getCanonicalPath, "episodes"))
+
+      val fileWithoutExtension = s"${dir.getCanonicalPath}/episodes"
+      val df1 = spark.read.avro(fileWithoutExtension)
+      assert(df1.count == 8)
+
+      val schema = new StructType()
+        .add("title", StringType)
+        .add("air_date", StringType)
+        .add("doctor", IntegerType)
+      val df2 = spark.read.schema(schema).avro(fileWithoutExtension)
+      assert(df2.count == 8)
     }
   }
 }

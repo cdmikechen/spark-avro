@@ -22,7 +22,7 @@ import java.util.zip.Deflater
 
 import scala.util.control.NonFatal
 
-import com.databricks.spark.avro.DefaultSource.{AvroSchema, IgnoreFilesWithoutExtensionProperty, SerializableConfiguration}
+import com.databricks.spark.avro.DefaultSource.{AvroSchema, SerializableConfiguration}
 import com.esotericsoftware.kryo.{Kryo, KryoSerializable}
 import com.esotericsoftware.kryo.io.{Input, Output}
 import org.apache.avro.{Schema, SchemaBuilder}
@@ -52,6 +52,9 @@ private[avro] class DefaultSource extends FileFormat with DataSourceRegister {
     case _ => false
   }
 
+  // Dummy hashCode() to appease ScalaStyle.
+  override def hashCode(): Int = super.hashCode()
+
   override def inferSchema(
       spark: SparkSession,
       options: Map[String, String],
@@ -60,7 +63,7 @@ private[avro] class DefaultSource extends FileFormat with DataSourceRegister {
 
     // Schema evolution is not supported yet. Here we only pick a single random sample file to
     // figure out the schema of the whole dataset.
-    val sampleFile = if (conf.getBoolean(IgnoreFilesWithoutExtensionProperty, true)) {
+    val sampleFile = if (DefaultSource.ignoreFilesWithoutExtensions(conf)) {
       files.find(_.getPath.getName.endsWith(".avro")).getOrElse {
         throw new FileNotFoundException(
           "No Avro files found. Hadoop option \"avro.mapred.ignore.inputs.without.extension\" is " +
@@ -113,7 +116,8 @@ private[avro] class DefaultSource extends FileFormat with DataSourceRegister {
     val recordName = options.getOrElse("recordName", "topLevelRecord")
     val recordNamespace = options.getOrElse("recordNamespace", "")
     val build = SchemaBuilder.record(recordName).namespace(recordNamespace)
-    val outputAvroSchema = SchemaConverters.convertStructToAvro(dataSchema, build, recordNamespace)
+    val outputAvroSchema = SchemaConverters.convertStructToAvro(dataSchema, build,
+      SchemaNsNaming.fromName(recordNamespace))
 
     AvroJob.setOutputKeySchema(job, outputAvroSchema)
     val AVRO_COMPRESSION_CODEC = "spark.sql.avro.compression.codec"
@@ -166,10 +170,7 @@ private[avro] class DefaultSource extends FileFormat with DataSourceRegister {
       // Doing input file filtering is improper because we may generate empty tasks that process no
       // input files but stress the scheduler. We should probably add a more general input file
       // filtering mechanism for `FileFormat` data sources. See SPARK-16317.
-      if (
-        conf.getBoolean(IgnoreFilesWithoutExtensionProperty, true) &&
-        !file.filePath.endsWith(".avro")
-      ) {
+      if (DefaultSource.ignoreFilesWithoutExtensions(conf) && !file.filePath.endsWith(".avro")) {
         Iterator.empty
       } else {
         val reader = {
@@ -279,5 +280,12 @@ private[avro] object DefaultSource {
       value = new Configuration(false)
       value.readFields(new DataInputStream(in))
     }
+  }
+
+  def ignoreFilesWithoutExtensions(conf: Configuration): Boolean = {
+    // Files without .avro extensions are not ignored by default
+    val defaultValue = false
+
+    conf.getBoolean(IgnoreFilesWithoutExtensionProperty, defaultValue)
   }
 }

@@ -146,7 +146,7 @@ private[avro] class DefaultSource extends FileFormat with DataSourceRegister {
         log.error(s"unsupported compression codec $unknown")
     }
 
-    new AvroOutputWriterFactory(dataSchema, recordName, recordNamespace)
+    new AvroOutputWriterFactory(dataSchema, outputAvroSchema.toString, recordName, recordNamespace)
   }
 
   override def buildReader(

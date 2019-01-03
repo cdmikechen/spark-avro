@@ -16,15 +16,18 @@
 
 package com.databricks.spark.avro
 
+import org.apache.avro.Schema
 import org.apache.hadoop.mapreduce.TaskAttemptContext
-
 import org.apache.spark.sql.execution.datasources.{OutputWriter, OutputWriterFactory}
 import org.apache.spark.sql.types.StructType
 
 private[avro] class AvroOutputWriterFactory(
     schema: StructType,
+    avroSchemaAsJsonString: String,
     recordName: String,
     recordNamespace: String) extends OutputWriterFactory {
+
+  private lazy val avroSchema = new Schema.Parser().parse(avroSchemaAsJsonString)
 
   override def getFileExtension(context: TaskAttemptContext): String = {
     ".avro"
@@ -34,6 +37,6 @@ private[avro] class AvroOutputWriterFactory(
       path: String,
       dataSchema: StructType,
       context: TaskAttemptContext): OutputWriter = {
-    new AvroOutputWriter(path, context, schema, recordName, recordNamespace)
+    new AvroOutputWriter(path, context, schema, avroSchema, recordName, recordNamespace)
   }
 }

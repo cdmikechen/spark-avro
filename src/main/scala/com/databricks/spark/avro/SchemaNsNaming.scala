@@ -30,6 +30,13 @@ protected [avro] object SchemaNsNaming {
       if (namespace == null) fieldName else s"$namespace.$fieldName"
   }
 
+  case class DecimalSchemaNsNaming(namespace: String, fieldName: String)
+    extends SchemaNsNaming {
+
+    override val currentNamespace: String =
+      if (namespace == null) s"$fieldName.fixed" else s"$namespace.$fieldName.fixed"
+  }
+
   case class StructSchemaNsNaming(currentNamespace: String, structFieldName: String)
     extends SchemaNsNaming
 
@@ -48,4 +55,7 @@ protected [avro] sealed trait SchemaNsNaming {
   def arrayFieldNaming(fieldName: String, valueType: DataType): SchemaNsNaming = this
 
   def mapFieldNaming(fieldName: String, valueType: DataType): SchemaNsNaming = this
+
+  def decimalFieldNaming(fieldName: String): SchemaNsNaming =
+    DecimalSchemaNsNaming(currentNamespace, fieldName)
 }

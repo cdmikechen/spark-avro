@@ -23,6 +23,7 @@ import scala.collection.JavaConverters._
 import scala.reflect.ClassTag
 
 import org.apache.avro.{LogicalTypes, Schema, SchemaBuilder}
+import org.apache.avro.LogicalTypes.{Date, Decimal, TimestampMicros, TimestampMillis}
 import org.apache.avro.Schema.Type._
 import org.apache.avro.SchemaBuilder._
 import org.apache.avro.generic.{GenericData, GenericRecord}
@@ -72,10 +73,10 @@ object SchemaConverters {
   def toSqlType(avroSchema: Schema): SchemaType = {
 
     val logicalTypesConverter: PartialFunction[Schema, SchemaType] = {
-      case s if LogicalTypePredicates.DECIMAL.apply(s) =>
-        val precision = s.getJsonProp("precision").asInt(DecimalType.MAX_PRECISION)
-        val scale = s.getJsonProp("scale").asInt(0)
-        SchemaType(DataTypes.createDecimalType(precision, scale), nullable = false)
+//      case s if LogicalTypePredicates.DECIMAL.apply(s) =>
+//        val precision = s.getJsonProp("precision").asInt(DecimalType.MAX_PRECISION)
+//        val scale = s.getJsonProp("scale").asInt(0)
+//        SchemaType(DataTypes.createDecimalType(precision, scale), nullable = false)
 
       case s if LogicalTypePredicates.TIMESTAMP.apply(s) =>
         SchemaType(TimestampType, nullable = false)
@@ -88,11 +89,16 @@ object SchemaConverters {
       case INT => SchemaType(IntegerType, nullable = false)
       case STRING => SchemaType(StringType, nullable = false)
       case BOOLEAN => SchemaType(BooleanType, nullable = false)
-      case BYTES => SchemaType(BinaryType, nullable = false)
+      case BYTES|FIXED => avroSchema.getLogicalType match {
+        // For FIXED type, if the precision requires more bytes than fixed size, the logical
+        // type will be null, which is handled by Avro library.
+        case d: Decimal => SchemaType(DecimalType(d.getPrecision, d.getScale), nullable = false)
+        case _ => SchemaType(BinaryType, nullable = false)
+      }
       case DOUBLE => SchemaType(DoubleType, nullable = false)
       case FLOAT => SchemaType(FloatType, nullable = false)
       case LONG => SchemaType(LongType, nullable = false)
-      case FIXED => SchemaType(BinaryType, nullable = false)
+//      case FIXED => SchemaType(BinaryType, nullable = false)
       case ENUM => SchemaType(StringType, nullable = false)
 
       case RECORD =>
@@ -167,17 +173,21 @@ object SchemaConverters {
       val fieldName = field.name
       val schemaBuilder = getSchemaBuilder(field.nullable)
       val fieldSchema = convertTypeToAvro(field.dataType, schemaBuilder, fieldName,
-        recordNamespace.structFieldNaming(fieldName))
+        (if(field.dataType == DecimalType)
+          recordNamespace.structFieldNaming(fieldName) else
+          recordNamespace.decimalFieldNaming(fieldName))
+      )
 
       fieldsAssembler.name(fieldName).`type`(fieldSchema).noDefault()
     }
     fieldsAssembler.endRecord()
   }
 
-  def convertStructToAvro[T](
-                              structType: StructType,
-                              schemaBuilder: RecordBuilder[T],
-                              recordNamespace: String): T = {
+  /**
+    * Set up a method to keep the external API unchanged
+    */
+  def convertStructToAvro[T](structType: StructType, schemaBuilder: RecordBuilder[T],
+                             recordNamespace: String): T = {
     convertStructToAvro(structType, schemaBuilder, SchemaNsNaming.fromName(recordNamespace))
   }
 
@@ -205,7 +215,7 @@ object SchemaConverters {
           item => new Timestamp(item.asInstanceOf[Long])
 
         case (_: DateType, s) if LogicalTypePredicates.DATE.apply(s) =>
-          item => Date.valueOf(LocalDate.ofEpochDay(item.asInstanceOf[Int]))
+          item => java.sql.Date.valueOf(LocalDate.ofEpochDay(item.asInstanceOf[Int]))
       }
 
       val fallbackConverters: PartialFunction[(DataType, Schema.Type), AnyRef => AnyRef] = {
@@ -219,7 +229,7 @@ object SchemaConverters {
         case (TimestampType, LONG) =>
           (item: AnyRef) => new Timestamp(item.asInstanceOf[Long])
         case (DateType, LONG) =>
-          (item: AnyRef) => new Date(item.asInstanceOf[Long])
+          (item: AnyRef) => new java.sql.Date(item.asInstanceOf[Long])
         case (BinaryType, FIXED) =>
           (item: AnyRef) => item.asInstanceOf[GenericFixed].bytes().clone()
         case (BinaryType, BYTES) =>
@@ -370,9 +380,14 @@ object SchemaConverters {
       case FloatType => schemaBuilder.floatType()
       case DoubleType => schemaBuilder.doubleType()
       case dec: DecimalType =>
-        val logicalSchema = LogicalTypes.decimal(dec.precision, dec.scale)
-          .addToSchema(SchemaBuilder.builder().bytesType())
-        schemaBuilder.`type`(logicalSchema)
+        val avroType = LogicalTypes.decimal(dec.precision, dec.scale)
+        val fixedSize = minBytesForPrecision(dec.precision)
+        // Need to avoid naming conflict for the fixed fields
+        val name = recordNamespace.currentNamespace
+        avroType.addToSchema(SchemaBuilder.fixed(name).size(fixedSize))
+//        val logicalSchema = LogicalTypes.decimal(dec.precision, dec.scale)
+//          .addToSchema(SchemaBuilder.builder().bytesType())
+//        schemaBuilder.`type`(logicalSchema)
       case StringType => schemaBuilder.stringType()
       case BinaryType => schemaBuilder.bytesType()
       case BooleanType => schemaBuilder.booleanType()
@@ -412,5 +427,15 @@ object SchemaConverters {
     } else {
       SchemaBuilder.builder()
     }
+  }
+
+  lazy val minBytesForPrecision = Array.tabulate[Int](39)(computeMinBytesForPrecision)
+
+  private def computeMinBytesForPrecision(precision : Int) : Int = {
+    var numBytes = 1
+    while (math.pow(2.0, 8 * numBytes - 1) < math.pow(10.0, precision)) {
+      numBytes += 1
+    }
+    numBytes
   }
 }

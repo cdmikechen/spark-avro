@@ -40,6 +40,8 @@ object SchemaConverters {
 
   class IncompatibleSchemaException(msg: String, ex: Throwable = null) extends Exception(msg, ex)
 
+  private lazy val nullSchema = Schema.create(Schema.Type.NULL)
+
   case class SchemaType(dataType: DataType, nullable: Boolean)
 
   private[avro] object LogicalTypePredicates {
@@ -60,7 +62,7 @@ object SchemaConverters {
     def ofSchema(aType: Schema.Type): FieldPredicate = schema =>
       schema.getType == aType
 
-    val DECIMAL: FieldPredicate = ofSchema(BYTES) and withProp("logicalType" -> "decimal")
+    val DECIMAL: FieldPredicate = ofSchema(FIXED) and withProp("logicalType" -> "decimal")
 
     val TIMESTAMP: FieldPredicate = ofSchema(LONG) and withProp("logicalType" -> "timestamp-millis")
 
@@ -173,10 +175,7 @@ object SchemaConverters {
       val fieldName = field.name
       val schemaBuilder = getSchemaBuilder(field.nullable)
       val fieldSchema = convertTypeToAvro(field.dataType, schemaBuilder, fieldName,
-        (if(field.dataType == DecimalType)
-          recordNamespace.structFieldNaming(fieldName) else
-          recordNamespace.decimalFieldNaming(fieldName))
-      )
+        recordNamespace.structFieldNaming(fieldName))
 
       fieldsAssembler.name(fieldName).`type`(fieldSchema).noDefault()
     }
@@ -384,7 +383,8 @@ object SchemaConverters {
         val fixedSize = minBytesForPrecision(dec.precision)
         // Need to avoid naming conflict for the fixed fields
         val name = recordNamespace.currentNamespace
-        avroType.addToSchema(SchemaBuilder.fixed(name).size(fixedSize))
+        val decimalSchema = avroType.addToSchema(SchemaBuilder.fixed(name).size(fixedSize))
+        Schema.createUnion(decimalSchema, nullSchema)
 //        val logicalSchema = LogicalTypes.decimal(dec.precision, dec.scale)
 //          .addToSchema(SchemaBuilder.builder().bytesType())
 //        schemaBuilder.`type`(logicalSchema)
